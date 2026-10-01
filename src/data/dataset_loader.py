@@ -70,7 +70,7 @@ class DatasetLoader:
         if not self.config_path.exists():
             raise FileNotFoundError(f"Datasets config not found: {self.config_path}")
 
-        with open(self.config_path) as f:
+        with open(self.config_path, encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
         self._datasets_cache = config.get('datasets', {})
@@ -166,8 +166,10 @@ class DatasetLoader:
         if not file_path.exists():
             raise FileNotFoundError(f"Dataset file not found: {file_path}")
 
-        # Load JSON data
-        with open(file_path) as f:
+        # Load JSON data. Explicit UTF-8: without it Windows falls back to
+        # cp1252 and any non-Latin source text (e.g. the Japanese in
+        # DiscourseMT) raises UnicodeDecodeError.
+        with open(file_path, encoding="utf-8") as f:
             data = json.load(f)
 
         # Apply max_samples filter

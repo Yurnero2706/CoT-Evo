@@ -383,10 +383,17 @@ Your step-by-step reasoning that incorporates the advice and avoids previous err
 
         # Priority 2: Try to extract JSON
         # Look for {"Major Product": "..."} or similar
+        # NOTE: each of these carried a stray ")" with no opening bracket, which
+        # made it an invalid regex. re.search then raised re.PatternError for any
+        # mutation output that did not already carry <|think|>/<|answer|>
+        # markers, so a model deviating from the format crashed answer
+        # extraction instead of falling through to the heuristics below. Same
+        # bug, same fix, as in src/utils/answer_extractor.py. group(0) is what
+        # gets parsed, so no capture group is needed here.
         json_patterns = [
-            r'\{\s*"Major Product"\s*:\s*"[^"]+)"\s*\}',
-            r'\{\s*"result"\s*:\s*"[^"]+)"\s*\}',
-            r'\{\s*"answer"\s*:\s*"[^"]+)"\s*\}',
+            r'\{\s*"Major Product"\s*:\s*"[^"]+"\s*\}',
+            r'\{\s*"result"\s*:\s*"[^"]+"\s*\}',
+            r'\{\s*"answer"\s*:\s*"[^"]+"\s*\}',
         ]
 
         for pattern in json_patterns:

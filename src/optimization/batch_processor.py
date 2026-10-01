@@ -347,8 +347,8 @@ class BatchProcessor:
             "errors": batch_result.errors
         }
 
-        with open(output_path, "w") as f:
-            json.dump(data, f, indent=2)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
 
         logger.info(f"Results saved to {output_path}")
 

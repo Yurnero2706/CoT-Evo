@@ -35,6 +35,7 @@ class OpenAIProvider(LLMProvider):
         api_key: Optional[str] = None,
         timeout: int = 120,
         max_retries: int = 3,
+        capture_reasoning: bool = False,
         **kwargs
     ):
         """
@@ -46,12 +47,16 @@ class OpenAIProvider(LLMProvider):
             api_key: API key for authentication
             timeout: Request timeout in seconds
             max_retries: Maximum number of retries on failure
+            capture_reasoning: Fold a separately-returned reasoning trace back
+                into the response text (see _read_message). Off by default, so
+                existing callers see unchanged behaviour.
             **kwargs: Additional parameters
         """
         super().__init__(model_name, base_url, api_key, **kwargs)
 
         self.timeout = timeout
         self.max_retries = max_retries
+        self.capture_reasoning = capture_reasoning
 
         # Initialize sync and async clients
         client_kwargs = {"api_key": api_key or "dummy-key"}
@@ -115,7 +120,7 @@ class OpenAIProvider(LLMProvider):
 
         try:
             response = self._sync_client.chat.completions.create(**api_params)
-            return response.choices[0].message.content
+            return self._read_message(response)
 
         except Exception as e:
             logger.error(f"Error generating with {self.model_name}: {e}")
@@ -167,11 +172,54 @@ class OpenAIProvider(LLMProvider):
 
         try:
             response = await self._async_client.chat.completions.create(**api_params)
-            return response.choices[0].message.content
+            return self._read_message(response)
 
         except Exception as e:
             logger.error(f"Error generating async with {self.model_name}: {e}")
             raise
+
+    def _read_message(self, response: Any) -> str:
+        """
+        Read the assistant message, optionally folding in a separate reasoning trace.
+
+        Reasoning endpoints (DeepSeek thinking mode, R1-style deployments, and
+        most gateways fronting them) return the chain of thought in a
+        `reasoning_content` field and leave only the final answer in `content`.
+        Reading `content` alone would hand the framework an empty CoT.
+
+        When capture_reasoning is enabled, the two halves are recombined into
+        the framework's own <|think|>/<|answer|> format, which is exactly what
+        extract_cot_and_answer expects. When it is disabled - the default - the
+        raw `content` is returned unchanged.
+
+        Args:
+            response: Chat completion response from the API
+
+        Returns:
+            Response text, with the reasoning trace merged in where applicable
+        """
+        message = response.choices[0].message
+        content = message.content or ""
+
+        if not self.capture_reasoning:
+            return content
+
+        reasoning = getattr(message, "reasoning_content", None)
+        if not reasoning:
+            # Fields outside the OpenAI schema land in model_extra, and some
+            # gateways name it "reasoning" instead.
+            extra = getattr(message, "model_extra", None) or {}
+            reasoning = extra.get("reasoning_content") or extra.get("reasoning")
+
+        if not reasoning:
+            return content
+
+        if "<|think|>" in content:
+            # The model already emitted the framework's format itself; leave it
+            # alone rather than nesting a second think block inside it.
+            return content
+
+        return f"<|think|>\n{reasoning.strip()}\n<|answer|>\n{content.strip()}"
 
     @property
     def provider_type(self) -> str:

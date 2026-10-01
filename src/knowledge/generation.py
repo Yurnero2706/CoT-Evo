@@ -22,14 +22,19 @@ class KnowledgeGenerator:
     where an LLM analyzes the correct answer and extracts necessary domain knowledge.
     """
 
-    def __init__(self, model: LLMProvider):
+    def __init__(self, model: LLMProvider, prompt_template: Optional[str] = None):
         """
         Initialize the knowledge generator.
 
         Args:
             model: LLM to use for knowledge generation (typically a high-capability model)
+            prompt_template: Optional domain-specific prompt with {query} and
+                {ground_truth} placeholders. Defaults to the scientific prompt,
+                which is wrong for non-science datasets — see
+                DISCOURSE_KNOWLEDGE_GENERATION_PROMPT for the translation variant.
         """
         self.model = model
+        self.prompt_template = prompt_template or KNOWLEDGE_GENERATION_PROMPT
 
     async def generate_knowledge(
         self,
@@ -49,7 +54,7 @@ class KnowledgeGenerator:
         Returns:
             Generated knowledge snippet
         """
-        prompt = KNOWLEDGE_GENERATION_PROMPT.format(
+        prompt = self.prompt_template.format(
             query=query,
             ground_truth=ground_truth
         )

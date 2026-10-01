@@ -23,10 +23,18 @@ def extract_cot_and_answer(model_output: str) -> Tuple[str, str]:
     <|answer|>
     {answer}
 
-    Fallback formats:
+    Fallback formats, tried in order:
+    - only one of the two markers present (generation cut short by a stop
+      sequence or a token limit)
+    - "[ANSWER_START]<answer>[ANSWER_END]", closing marker optional
+    - JSON format: {"Major Product": "..."}
     - "reasoning...\n\nfinal result: <answer>"
     - "reasoning...\n\nThe answer is: <answer>"
-    - JSON format: {"Major Product": "..."}
+    - last non-empty line treated as the answer
+
+    This function never raises on malformed input: a model that ignores the
+    requested format yields a best-effort split, not an exception, because
+    callers drop any trajectory whose generation raised.
 
     Args:
         model_output: Full model output
@@ -47,18 +55,54 @@ def extract_cot_and_answer(model_output: str) -> Tuple[str, str]:
     think_start = model_output.find("<|think|>")
     think_end = model_output.find("<|answer|>")
 
-    if think_start != -1 and think_end != -1:
+    if think_start != -1 and think_end > think_start:
         reasoning = model_output[think_start + 9:think_end].strip()
         answer = model_output[think_end + 10:].strip()
         logger.debug(f"Extracted reasoning ({len(reasoning)} chars) and answer using <|think|>/<|answer|> format")
         return reasoning, answer
 
-    # Priority 2: Try JSON format (ChemCoTDataset common)
+    # Priority 1b: only one of the two markers is present. This happens whenever
+    # generation ends before the model closes the block - a stop sequence firing
+    # early, a max_tokens cutoff, or the model writing its answer inside the
+    # think block. Recover the halves here; otherwise the marker would be left
+    # embedded in the reasoning by the generic heuristics further down.
+    if think_end != -1:
+        # <|answer|> with no preceding <|think|>.
+        answer = model_output[think_end + 10:].strip()
+        if answer:
+            reasoning = model_output[:think_end].replace("<|think|>", "").strip()
+            logger.debug("Extracted using <|answer|> only (no <|think|> marker)")
+            return reasoning, answer
+    elif think_start != -1:
+        # <|think|> that is never closed. Drop the marker and keep looking for
+        # the answer in what follows.
+        model_output = model_output[think_start + 9:].strip()
+        logger.debug("Found <|think|> with no <|answer|>; parsing the remainder")
+
+    # Priority 2: explicit [ANSWER_START]...[ANSWER_END] markers (BioProBench,
+    # DiscourseMT). The closing marker is optional because it is also used as a
+    # stop sequence, so the API strips it from the response.
+    marker_match = re.search(
+        r'\[ANSWER_START\](.*?)(?:\[ANSWER_END\]|$)', model_output, re.DOTALL
+    )
+    if marker_match:
+        answer = marker_match.group(1).strip()
+        if answer:
+            reasoning = model_output[:marker_match.start()].strip()
+            logger.debug(f"Extracted reasoning ({len(reasoning)} chars) and answer using [ANSWER_START] markers")
+            return reasoning, answer
+
+    # Priority 3: Try JSON format (ChemCoTDataset common)
     # Look for {"Major Product": "..."} or {"result": "..."}
+    # NOTE: these patterns previously carried a stray ")" with no opening
+    # bracket, which made every one of them an invalid regex. re.search then
+    # raised re.error for any output that did not hit Priority 1, so a model
+    # that deviated from the <|think|>/<|answer|> format crashed extraction
+    # instead of falling back. The capture group is what was intended.
     json_patterns = [
-        r'\{\s*"Major Product"\s*:\s*"[^"]+)"\s*\}',
-        r'\{\s*"result"\s*:\s*"[^"]+)"\s*\}',
-        r'\{\s*"answer"\s*:\s*"[^"]+)"\s*\}',
+        r'\{\s*"Major Product"\s*:\s*"([^"]+)"\s*\}',
+        r'\{\s*"result"\s*:\s*"([^"]+)"\s*\}',
+        r'\{\s*"answer"\s*:\s*"([^"]+)"\s*\}',
     ]
 
     for pattern in json_patterns:
@@ -78,7 +122,7 @@ def extract_cot_and_answer(model_output: str) -> Tuple[str, str]:
             except json.JSONDecodeError:
                 continue
 
-    # Priority 3: Try "final result:" or similar patterns
+    # Priority 4: Try "final result:" or similar patterns
     patterns = [
         r'\n\nfinal result\s*:?\s*(.+?)\s*$',
         r'\n\nThe answer is\s*:?\s*(.+?)\s*$',
@@ -94,7 +138,7 @@ def extract_cot_and_answer(model_output: str) -> Tuple[str, str]:
             logger.debug(f"Extracted reasoning ({len(reasoning)} chars) and answer using pattern matching")
             return reasoning, answer
 
-    # Priority 4: Fallback - treat last line as answer
+    # Priority 5: Fallback - treat last line as answer
     lines = model_output.split('\n')
     if len(lines) > 1:
         # Last non-empty line is likely the answer
@@ -197,6 +241,16 @@ def clean_answer(answer: str) -> str:
 
     # Remove <|think|> and <|answer|> markers if present
     answer = answer.replace("<|think|>", "").replace("<|answer|>", "").strip()
+
+    # Unwrap [ANSWER_START]...[ANSWER_END] if present. extract_cot_and_answer
+    # returns everything after <|answer|> verbatim, so for datasets that ask for
+    # these markers (BioProBench, DiscourseMT) the prediction still carries them
+    # while the ground truth does not, which would fail exact match.
+    marker_match = re.search(
+        r'\[ANSWER_START\](.*?)(?:\[ANSWER_END\]|$)', answer, re.DOTALL
+    )
+    if marker_match:
+        answer = marker_match.group(1).strip()
 
     # If it's JSON format, extract the actual value
     try:

@@ -18,7 +18,12 @@ from .prompts import (
     SYSTEM_PROMPTS,
     VANILLA_TEMPLATE,
     KNOWLEDGE_AUGMENTED_TEMPLATE,
+    DISCOURSE_MT_VANILLA_TEMPLATE,
+    DISCOURSE_MT_KNOWLEDGE_TEMPLATE,
+    DISCOURSE_MT_NOCTX_VANILLA_TEMPLATE,
+    DISCOURSE_MT_NOCTX_KNOWLEDGE_TEMPLATE,
     STOP_SEQUENCES,
+    resolve_prompt_family,
 )
 
 
@@ -55,14 +60,32 @@ class MultiThinkerGenerator:
         self.knowledge_augmenter = knowledge_augmenter
         self.dataset_name = dataset_name
 
-        # Get system prompt for this dataset
+        # Derived datasets (e.g. a context-ablated control) must send the same
+        # prompts as the dataset they derive from, so resolve the family first
+        # and branch on that everywhere below, never on dataset_name directly.
+        self.prompt_family = resolve_prompt_family(dataset_name)
+
+        # Get system prompt for this dataset. "generic" and "SciKnowEval" are
+        # meant to land on the science prompt, so only warn for the rest.
+        if (self.prompt_family not in SYSTEM_PROMPTS
+                and self.prompt_family not in ("generic", "SciKnowEval")):
+            # Silent fallback to the science prompt is how a translation dataset
+            # ends up being told to answer in JSON, so say so loudly.
+            logger.warning(
+                f"No system prompt registered for dataset '{dataset_name}' "
+                f"(resolved family '{self.prompt_family}'). Falling back to the "
+                f"generic SciKnowEval science prompt, which is almost certainly "
+                f"wrong. Add it to SYSTEM_PROMPTS, or map it in "
+                f"PROMPT_FAMILY_ALIASES, in src/initialization/prompts.py."
+            )
+
         self.system_prompt = SYSTEM_PROMPTS.get(
-            dataset_name,
+            self.prompt_family,
             SYSTEM_PROMPTS["SciKnowEval"]  # Fallback to generic science prompt
         )
 
         # Get stop sequences for this dataset
-        self.stop_sequences = STOP_SEQUENCES.get(dataset_name, [])
+        self.stop_sequences = STOP_SEQUENCES.get(self.prompt_family, [])
 
     async def generate_initial_pool(
         self,
@@ -165,7 +188,7 @@ class MultiThinkerGenerator:
         # Use enhanced prompt (matching test_complete_evolution.py)
         if prompt_template is None:
             # Determine prompt based on dataset
-            if self.dataset_name in ["ChemCoTDataset", "ChemCoTBench"]:
+            if self.prompt_family in ["ChemCoTDataset", "ChemCoTBench"]:
                 prompt = f"""Please solve the following chemistry problem step by step.
 
 Your response must follow this exact format:
@@ -180,7 +203,7 @@ Remember to:
 1. Think step by step
 2. Show your work clearly
 3. Provide your final answer in the specified JSON format"""
-            elif self.dataset_name == "BioProBench":
+            elif self.prompt_family == "BioProBench":
                 prompt = f"""Please solve the following biological problem step by step.
 
 Your response must follow this exact format:
@@ -195,6 +218,10 @@ Remember to:
 1. Think step by step
 2. Show your work clearly
 3. Provide your final answer in the specified format"""
+            elif self.prompt_family == "DiscourseMT":
+                prompt = DISCOURSE_MT_VANILLA_TEMPLATE.format(query=query)
+            elif self.prompt_family == "DiscourseMT_NoContext":
+                prompt = DISCOURSE_MT_NOCTX_VANILLA_TEMPLATE.format(query=query)
             else:
                 # Generic fallback
                 prompt = VANILLA_TEMPLATE.format(query=query)
@@ -250,7 +277,7 @@ Remember to:
         # Use enhanced prompt (matching test_complete_evolution.py)
         if prompt_template is None:
             # Determine prompt based on dataset
-            if self.dataset_name in ["ChemCoTDataset", "ChemCoTBench"]:
+            if self.prompt_family in ["ChemCoTDataset", "ChemCoTBench"]:
                 prompt = f"""Please solve the following chemistry problem step by step. Use the provided knowledge to help you.
 
 Relevant knowledge:
@@ -269,7 +296,7 @@ Remember to:
 2. Think step by step
 3. Show your work clearly
 4. Provide your final answer in the specified JSON format"""
-            elif self.dataset_name == "BioProBench":
+            elif self.prompt_family == "BioProBench":
                 prompt = f"""Please solve the following biological problem step by step. Use the provided knowledge to help you.
 
 Relevant knowledge:
@@ -288,6 +315,16 @@ Remember to:
 2. Think step by step
 3. Show your work clearly
 4. Provide your final answer in the specified format"""
+            elif self.prompt_family == "DiscourseMT":
+                prompt = DISCOURSE_MT_KNOWLEDGE_TEMPLATE.format(
+                    query=query,
+                    knowledge=knowledge
+                )
+            elif self.prompt_family == "DiscourseMT_NoContext":
+                prompt = DISCOURSE_MT_NOCTX_KNOWLEDGE_TEMPLATE.format(
+                    query=query,
+                    knowledge=knowledge
+                )
             else:
                 # Generic fallback
                 prompt = KNOWLEDGE_AUGMENTED_TEMPLATE.format(

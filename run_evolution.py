@@ -40,6 +40,7 @@ from src.core.fitness import (
 )
 from src.knowledge.generation import KnowledgeGenerator
 from src.knowledge.hybrid import HybridKnowledgeAugmenter
+from src.initialization.prompts import DISCOURSE_KNOWLEDGE_GENERATION_PROMPT
 from src.utils.answer_extractor import extract_cot_and_answer, clean_answer
 
 # Helper function to calculate reasoning length (matching test_complete_evolution.py)
@@ -285,7 +286,18 @@ async def run_evolution_on_dataset(
         kg_model = registry.get_judge_model()
 
     if kg_model:
-        knowledge_generator = KnowledgeGenerator(model=kg_model)
+        # The default knowledge prompt asks for scientific facts and formulas,
+        # which do not exist for a translation item; language datasets need the
+        # linguistic-cue variant instead.
+        knowledge_prompt = (
+            DISCOURSE_KNOWLEDGE_GENERATION_PROMPT
+            if dataset_name == "DiscourseMT"
+            else None
+        )
+        knowledge_generator = KnowledgeGenerator(
+            model=kg_model,
+            prompt_template=knowledge_prompt
+        )
         knowledge_augmenter = HybridKnowledgeAugmenter(generator=knowledge_generator)
         logger.info("Knowledge augmentation enabled (using LLM-based generation)")
     else:
@@ -358,7 +370,10 @@ async def run_evolution_on_dataset(
             # Save individual result (matching test_complete_evolution.py format)
             sample_result_file = output_dir / f"sample_{idx}_{sample_id[:8]}.json"
             import json
-            with open(sample_result_file, 'w') as f:
+            # Explicit UTF-8 + ensure_ascii=False so non-Latin source text
+            # (e.g. the Japanese in DiscourseMT) round-trips readably instead
+            # of raising UnicodeEncodeError under the Windows default codec.
+            with open(sample_result_file, 'w', encoding='utf-8') as f:
                 json.dump({
                     "sample_id": sample_id,
                     "task": sample.get('task', ''),
@@ -373,7 +388,7 @@ async def run_evolution_on_dataset(
                     "full_answer": best_trajectory.answer if best_trajectory else "",
                     "generations": sample_engine.generation,
                     "timestamp": datetime.now().isoformat()
-                }, f, indent=2)
+                }, f, indent=2, ensure_ascii=False)
 
             logger.info(f"[Sample {idx}] ✅ Complete - Fitness: {best_trajectory.fitness_score if best_trajectory else 0:.3f}")
 
@@ -443,8 +458,8 @@ async def run_evolution_on_dataset(
     # Save results
     results_file = output_dir / "results.json"
     import json
-    with open(results_file, 'w') as f:
-        json.dump(results, f, indent=2)
+    with open(results_file, 'w', encoding='utf-8') as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
 
     logger.info(f"\n{'='*70}")
     logger.info(f"Results saved to: {results_file}")
