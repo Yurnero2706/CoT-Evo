@@ -111,6 +111,115 @@ datasets:
       upper: 4500
 
   # ============================================================================
+  # Discourse MT Test Set (language task, not science)
+  # Nagata & Morishita, LREC 2020
+  # https://github.com/nttcslab-nlp/discourse-mt-test-sets
+  # Build the data files with: python scripts/prepare_discourse_mt.py
+  # ============================================================================
+  DiscourseMT:
+    name: "DiscourseMT"
+    description: "Japanese-to-English discourse translation test set (coreference, word-sense disambiguation, lexical repetition)"
+    data_format: "json"
+
+    # Task types = the three discourse phenomena. The `subtask` field on each
+    # sample records the framing (contrastive / lexical / translate) chosen when
+    # the data was prepared.
+    tasks:
+      coreference:
+        name: "Coreference / zero pronoun resolution"
+        evaluator: "generic"
+        answer_format: "[ANSWER_START]answer[ANSWER_END]"
+        requires_exact_match: true
+
+      disamb:
+        name: "Context-based word sense disambiguation"
+        evaluator: "generic"
+        answer_format: "[ANSWER_START]answer[ANSWER_END]"
+        requires_exact_match: true
+
+      repet:
+        name: "Lexical consistency across sentences"
+        evaluator: "generic"
+        answer_format: "[ANSWER_START]answer[ANSWER_END]"
+        requires_exact_match: true
+
+    # System prompt
+    system_prompt: |
+      You are an expert Japanese-to-English translator and a linguist specialising in discourse.
+      Given a Japanese passage and its preceding context, your task is to resolve the context-dependent
+      part of the translation by reasoning explicitly about the discourse, and then state the final result.
+      Ground your reasoning in linguistic evidence: what the Japanese source actually says, which arguments
+      are elided, what the context sentence establishes, and which English form that forces.
+      Do not decide on the basis of which English wording sounds more natural in isolation.
+      You should output the final answer in the last line of your response using the default format:
+      [ANSWER_START]final answer here[ANSWER_END]
+
+    # Data paths (produced by scripts/prepare_discourse_mt.py)
+    train_path: "./data/DiscourseMT/train.json"
+    test_path: "./data/DiscourseMT/test.json"
+
+    # Word counts, not token counts. Measured p15/p85 over 2070 deepseek-flash
+    # traces pooled across the 2026-09-26 with-context and no-context runs
+    # (median 139).
+    #
+    # These are specific to the prompt AND the model. The previous values
+    # (142/203) were measured under an earlier, more verbose prompt; after the
+    # prompt was tightened they put the *median* trace below the lower bound,
+    # so 55.8% of trajectories scored s_LEN=0.0 and only 0.2% landed in the 0.5
+    # band - a fitness term that penalises the typical trace rather than the
+    # outliers. Recompute from the p15/p85 line scripts/generate_cot_single.py
+    # prints whenever the prompt or the teacher model changes.
+    length_percentiles:
+      lower: 124
+      upper: 156
+
+  # ============================================================================
+  # DiscourseMT control condition: identical items with the context sentence
+  # withheld. Accuracy here is the context-blind floor - the real baseline your
+  # with-context score should be compared against, since the test set's designed
+  # 50% floor is an assumption that has already failed for one category in the
+  # original paper. Build with:
+  #   python scripts/prepare_discourse_mt.py --ablate-context \
+  #       --out-dir data/DiscourseMT_nocontext
+  # ============================================================================
+  DiscourseMT_NoContext:
+    name: "DiscourseMT_NoContext"
+    description: "DiscourseMT with the context sentence removed (context-blind control)"
+    data_format: "json"
+
+    tasks:
+      coreference:
+        name: "Coreference / zero pronoun resolution (context-blind)"
+        evaluator: "generic"
+        answer_format: "[ANSWER_START]answer[ANSWER_END]"
+        requires_exact_match: true
+      disamb:
+        name: "Context-based word sense disambiguation (context-blind)"
+        evaluator: "generic"
+        answer_format: "[ANSWER_START]answer[ANSWER_END]"
+        requires_exact_match: true
+      repet:
+        name: "Lexical consistency across sentences (context-blind)"
+        evaluator: "generic"
+        answer_format: "[ANSWER_START]answer[ANSWER_END]"
+        requires_exact_match: true
+
+    system_prompt: |
+      You are an expert Japanese-to-English translator and a linguist specialising in discourse.
+      Resolve the translation problem by reasoning explicitly about the Japanese source.
+      You should output the final answer in the last line of your response using the default format:
+      [ANSWER_START]final answer here[ANSWER_END]
+
+    train_path: "./data/DiscourseMT_nocontext/train.json"
+    test_path: "./data/DiscourseMT_nocontext/test.json"
+
+    # Deliberately identical to DiscourseMT: a control scored on a different
+    # length band would not be comparable to the treatment.
+    length_percentiles:
+      lower: 124
+      upper: 156
+
+  # ============================================================================
   # Generic/Custom Datasets
   # ============================================================================
   generic:
